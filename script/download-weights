@@ -8,7 +8,7 @@ from diffusers import StableDiffusionXLPipeline
 # append project directory to path so predict.py can be imported
 sys.path.append('.')
 
-from predict import MODEL_NAME, MODEL_CACHE
+from predict import MODEL_CACHE
 
 # Make cache folder
 if not os.path.exists(MODEL_CACHE):
