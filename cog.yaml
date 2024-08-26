@@ -10,6 +10,7 @@ build:
     - "diffusers==0.20.2"
     - "accelerate==0.21.0"
     - "pandas==2.0.3"
+    - "numpy==1.24.4"
 
   run:
     - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.0.3/pget" && chmod +x /usr/local/bin/pget
