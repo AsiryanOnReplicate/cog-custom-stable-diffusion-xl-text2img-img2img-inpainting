@@ -139,13 +139,14 @@ class Predictor(BasePredictor):
 
         self.weights_cache = WeightsDownloadCache()
         self.feature_extractor = CLIPImageProcessor.from_pretrained(FEATURE_EXTRACTOR)
+        self.is_lora = False
+        
         print("Loading SDXL txt2img pipeline...")
         self.txt2img_pipe = DiffusionPipeline.from_pretrained(
             MODEL_CACHE,
             torch_dtype=torch.float16,
             variant="fp16"
         )
-        self.is_lora = False
         if weights or os.path.exists("./trained-model"):
             self.load_trained_weights(weights, self.txt2img_pipe)
         self.txt2img_pipe.to("cuda")
@@ -160,7 +161,10 @@ class Predictor(BasePredictor):
             unet=self.txt2img_pipe.unet,
             scheduler=self.txt2img_pipe.scheduler,
         )
+        if weights or os.path.exists("./trained-model"):
+            self.load_trained_weights(weights, self.img2img_pipe)
         self.img2img_pipe.to("cuda")
+
         print("Loading SDXL inpaint pipeline...")
         self.inpaint_pipe = StableDiffusionXLInpaintPipeline(
             vae=self.txt2img_pipe.vae,
@@ -171,7 +175,10 @@ class Predictor(BasePredictor):
             unet=self.txt2img_pipe.unet,
             scheduler=self.txt2img_pipe.scheduler,
         )
+        if weights or os.path.exists("./trained-model"):
+            self.load_trained_weights(weights, self.inpaint_pipe)
         self.inpaint_pipe.to("cuda")
+
         print("setup took: ", time.time() - start)
 
     def load_image(self, path):
@@ -183,11 +190,11 @@ class Predictor(BasePredictor):
         self,
         prompt: str = Input(
             description="Input prompt",
-            default="abstract beauty, centered, looking at the camera, approaching perfection, dynamic, moonlight, highly detailed, digital painting, artstation, concept art, smooth, sharp focus, illustration, art by Carne Griffiths and Wadim Kashin"
+            default="photograph, In a surreal and unexpected world, a fierce woman with long white hair and sparkling blue eyes stares out into the sky with piercing ice blue eyes. She wears a flowing red scarf that flows around her body, adding to its intensity. The scene is set in a lush forest, with flowers of every color blooming around it. The woman's face seems almost otherworldly. at Sunrise, Wide view, Cel shading, Confused, Feralcore, double exposure, Ilford HP5, vanishing point, Albumen, (key visual, cinematic grey Color grading)"
         ),
         negative_prompt: str = Input(
             description="Negative Input prompt",
-            default="(worst quality, low quality, normal quality, lowres, low details, oversaturated, undersaturated, overexposed, underexposed, grayscale, bw, bad photo, bad photography, bad art:1.4), (watermark, signature, text font, username, error, logo, words, letters, digits, autograph, trademark, name:1.2), (blur, blurry, grainy), morbid, ugly, asymmetrical, mutated malformed, mutilated, poorly lit, bad shadow, draft, cropped, out of frame, cut off, censored, jpeg artifacts, out of focus, glitch, duplicate, (airbrushed, cartoon, anime, semi-realistic, cgi, render, blender, digital art, manga, amateur:1.3), (3D ,3D Game, 3D Game Scene, 3D Character:1.1), (bad hands, bad anatomy, bad body, bad face, bad teeth, bad arms, bad legs, deformities:1.3)"
+            default="bad quality, bad anatomy, worst quality, low quality, low resolutions, extra fingers, blur, blurry, ugly, wrongs proportions, watermark, image artifacts, lowres, ugly, jpeg artifacts, deformed, noisy image"
         ),
         image: Path = Input(
             description="Input image for img2img or inpaint mode",
@@ -249,17 +256,28 @@ class Predictor(BasePredictor):
 
         if lora_weights:
             self.load_trained_weights(lora_weights, self.txt2img_pipe)
+            self.load_trained_weights(lora_weights, self.img2img_pipe)
+            self.load_trained_weights(lora_weights, self.inpaint_pipe)
 
          # OOMs can leave vae in bad state
         if self.txt2img_pipe.vae.dtype == torch.float32:
             self.txt2img_pipe.vae.to(dtype=torch.float16)
 
+        if self.img2img_pipe.vae.dtype == torch.float32:
+            self.img2img_pipe.vae.to(dtype=torch.float16)
+
+        if self.inpaint_pipe.vae.dtype == torch.float32:
+            self.inpaint_pipe.vae.to(dtype=torch.float16)
+
         sdxl_kwargs = {}
+        
         if self.tuned_model:
             # consistency with fine-tuning API
             for k, v in self.token_map.items():
                 prompt = prompt.replace(k, v)
+
         print(f"Prompt: {prompt}")
+
         if image and mask:
             print("inpainting mode")
             sdxl_kwargs["image"] = self.load_image(image)
