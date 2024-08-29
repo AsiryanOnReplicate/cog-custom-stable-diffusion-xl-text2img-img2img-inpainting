@@ -139,14 +139,13 @@ class Predictor(BasePredictor):
 
         self.weights_cache = WeightsDownloadCache()
         self.feature_extractor = CLIPImageProcessor.from_pretrained(FEATURE_EXTRACTOR)
-        self.is_lora = False
-        
         print("Loading SDXL txt2img pipeline...")
         self.txt2img_pipe = DiffusionPipeline.from_pretrained(
             MODEL_CACHE,
             torch_dtype=torch.float16,
             variant="fp16"
         )
+        self.is_lora = False
         if weights or os.path.exists("./trained-model"):
             self.load_trained_weights(weights, self.txt2img_pipe)
         self.txt2img_pipe.to("cuda")
@@ -161,10 +160,7 @@ class Predictor(BasePredictor):
             unet=self.txt2img_pipe.unet,
             scheduler=self.txt2img_pipe.scheduler,
         )
-        if weights or os.path.exists("./trained-model"):
-            self.load_trained_weights(weights, self.img2img_pipe)
         self.img2img_pipe.to("cuda")
-
         print("Loading SDXL inpaint pipeline...")
         self.inpaint_pipe = StableDiffusionXLInpaintPipeline(
             vae=self.txt2img_pipe.vae,
@@ -175,10 +171,7 @@ class Predictor(BasePredictor):
             unet=self.txt2img_pipe.unet,
             scheduler=self.txt2img_pipe.scheduler,
         )
-        if weights or os.path.exists("./trained-model"):
-            self.load_trained_weights(weights, self.inpaint_pipe)
         self.inpaint_pipe.to("cuda")
-
         print("setup took: ", time.time() - start)
 
     def load_image(self, path):
@@ -256,28 +249,17 @@ class Predictor(BasePredictor):
 
         if lora_weights:
             self.load_trained_weights(lora_weights, self.txt2img_pipe)
-            self.load_trained_weights(lora_weights, self.img2img_pipe)
-            self.load_trained_weights(lora_weights, self.inpaint_pipe)
 
          # OOMs can leave vae in bad state
         if self.txt2img_pipe.vae.dtype == torch.float32:
             self.txt2img_pipe.vae.to(dtype=torch.float16)
 
-        if self.img2img_pipe.vae.dtype == torch.float32:
-            self.img2img_pipe.vae.to(dtype=torch.float16)
-
-        if self.inpaint_pipe.vae.dtype == torch.float32:
-            self.inpaint_pipe.vae.to(dtype=torch.float16)
-
         sdxl_kwargs = {}
-        
         if self.tuned_model:
             # consistency with fine-tuning API
             for k, v in self.token_map.items():
                 prompt = prompt.replace(k, v)
-
         print(f"Prompt: {prompt}")
-
         if image and mask:
             print("inpainting mode")
             sdxl_kwargs["image"] = self.load_image(image)
