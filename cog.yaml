@@ -7,10 +7,12 @@ build:
     - "torch==2.0.1"
     - "torchvision==0.15.2"
     - "transformers==4.26.1"
-    - "diffusers==0.20.2"
+    - "diffusers==0.30.2"
     - "accelerate==0.21.0"
     - "pandas==2.0.3"
     - "numpy==1.24.4"
+    - "huggingface_hub==0.24.7"
+    - "compel==2.0.3"
 
   run:
     - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.0.3/pget" && chmod +x /usr/local/bin/pget

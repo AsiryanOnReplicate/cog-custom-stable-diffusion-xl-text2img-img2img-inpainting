@@ -6,7 +6,6 @@ import json
 import torch
 import shutil
 import subprocess
-import numpy as np
 from typing import List, Optional
 from diffusers.utils import load_image
 from safetensors.torch import load_file
@@ -25,9 +24,12 @@ from diffusers import (
 )
 from dataset_and_utils import TokenEmbeddingsHandler
 from diffusers.models.attention_processor import LoRAAttnProcessor2_0
+from compel import Compel, ReturnedEmbeddingsType
 
 MODEL_CACHE = "./sdxl-cache"
 FEATURE_EXTRACTOR = "./feature-extractor"
+CLIP_SKIP = 2
+DEVICE = "cuda"
 
 class KarrasDPM:
     def from_config(config):
@@ -112,7 +114,7 @@ class Predictor(BasePredictor):
                         cross_attention_dim=cross_attention_dim,
                         rank=name_rank_map[name],
                     )
-                unet_lora_attn_procs[name] = module.to("cuda", non_blocking=True)
+                unet_lora_attn_procs[name] = module.to(DEVICE, non_blocking=True)
 
             unet.set_attn_processor(unet_lora_attn_procs)
             unet.load_state_dict(tensors, strict=False)
@@ -161,6 +163,7 @@ class Predictor(BasePredictor):
             scheduler=self.txt2img_pipe.scheduler,
         )
         self.img2img_pipe.to("cuda")
+
         print("Loading SDXL inpaint pipeline...")
         self.inpaint_pipe = StableDiffusionXLInpaintPipeline(
             vae=self.txt2img_pipe.vae,
@@ -172,6 +175,19 @@ class Predictor(BasePredictor):
             scheduler=self.txt2img_pipe.scheduler,
         )
         self.inpaint_pipe.to("cuda")
+
+        # clip skip
+        if CLIP_SKIP > 0:
+
+            clip_layers = self.txt2img_pipe.text_encoder.text_model.encoder.layers
+            self.txt2img_pipe.text_encoder.text_model.encoder.layers = clip_layers[:-CLIP_SKIP]
+
+            clip_layers = self.img2img_pipe.text_encoder.text_model.encoder.layers
+            self.img2img_pipe.text_encoder.text_model.encoder.layers = clip_layers[:-CLIP_SKIP]
+
+            clip_layers = self.inpaint_pipe.text_encoder.text_model.encoder.layers
+            self.inpaint_pipe.text_encoder.text_model.encoder.layers = clip_layers[:-CLIP_SKIP]
+
         print("setup took: ", time.time() - start)
 
     def load_image(self, path):
@@ -183,11 +199,11 @@ class Predictor(BasePredictor):
         self,
         prompt: str = Input(
             description="Input prompt",
-            default="photograph, In a surreal and unexpected world, a fierce woman with long white hair and sparkling blue eyes stares out into the sky with piercing ice blue eyes. She wears a flowing red scarf that flows around her body, adding to its intensity. The scene is set in a lush forest, with flowers of every color blooming around it. The woman's face seems almost otherworldly. at Sunrise, Wide view, Cel shading, Confused, Feralcore, double exposure, Ilford HP5, vanishing point, Albumen, (key visual, cinematic grey Color grading)"
+            default="score_9, score_8_up, score_7_up, very beautiful girl on the beach, zoom view, portrait"
         ),
         negative_prompt: str = Input(
             description="Negative Input prompt",
-            default="bad quality, bad anatomy, worst quality, low quality, low resolutions, extra fingers, blur, blurry, ugly, wrongs proportions, watermark, image artifacts, lowres, ugly, jpeg artifacts, deformed, noisy image"
+            default="score_6, score_5, score_4, bad quality, bad anatomy, worst quality, low quality, low resolutions, extra fingers, blur, blurry, ugly, wrongs proportions, watermark, image artifacts, lowres, jpeg artifacts, deformed, noisy image, poorly drawn face, ugly face, crossed eyes"
         ),
         image: Path = Input(
             description="Input image for img2img or inpaint mode",
@@ -260,8 +276,21 @@ class Predictor(BasePredictor):
             for k, v in self.token_map.items():
                 prompt = prompt.replace(k, v)
         print(f"Prompt: {prompt}")
+
+        # compel using
+        compel = Compel(tokenizer=[self.txt2img_pipe.tokenizer, self.txt2img_pipe.tokenizer_2], 
+            text_encoder=[self.txt2img_pipe.text_encoder, self.txt2img_pipe.text_encoder_2], 
+            returned_embeddings_type=ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NON_NORMALIZED, requires_pooled=[False, True])
+
+        prompt_embeds, pooled_prompt_embeds = compel([prompt] * num_outputs)
+        negative_prompt_embeds, negative_pooled_prompt_embeds = compel([negative_prompt] * num_outputs)
+
         if image and mask:
             print("inpainting mode")
+            sdxl_kwargs["prompt_embeds"] = prompt_embeds
+            sdxl_kwargs["pooled_prompt_embeds"] = pooled_prompt_embeds
+            sdxl_kwargs["negative_prompt_embeds"] = negative_prompt_embeds 
+            sdxl_kwargs["negative_pooled_prompt_embeds"] = negative_pooled_prompt_embeds
             sdxl_kwargs["image"] = self.load_image(image)
             sdxl_kwargs["mask_image"] = self.load_image(mask)
             sdxl_kwargs["strength"] = strength
@@ -270,11 +299,19 @@ class Predictor(BasePredictor):
             pipe = self.inpaint_pipe
         elif image:
             print("img2img mode")
+            sdxl_kwargs["prompt_embeds"] = prompt_embeds
+            sdxl_kwargs["pooled_prompt_embeds"] = pooled_prompt_embeds
+            sdxl_kwargs["negative_prompt_embeds"] = negative_prompt_embeds
+            sdxl_kwargs["negative_pooled_prompt_embeds"] = negative_pooled_prompt_embeds
             sdxl_kwargs["image"] = self.load_image(image)
             sdxl_kwargs["strength"] = strength
             pipe = self.img2img_pipe
         else:
             print("txt2img mode")
+            sdxl_kwargs["prompt_embeds"] = prompt_embeds
+            sdxl_kwargs["pooled_prompt_embeds"] = pooled_prompt_embeds
+            sdxl_kwargs["negative_prompt_embeds"] = negative_prompt_embeds
+            sdxl_kwargs["negative_pooled_prompt_embeds"] = negative_pooled_prompt_embeds
             sdxl_kwargs["width"] = width
             sdxl_kwargs["height"] = height
             pipe = self.txt2img_pipe
@@ -283,11 +320,9 @@ class Predictor(BasePredictor):
         generator = torch.Generator("cuda").manual_seed(seed)
 
         common_args = {
-            "prompt": [prompt] * num_outputs,
-            "negative_prompt": [negative_prompt] * num_outputs,
             "guidance_scale": guidance_scale,
             "generator": generator,
-            "num_inference_steps": num_inference_steps,
+            "num_inference_steps": num_inference_steps
         }
 
         if self.is_lora:
