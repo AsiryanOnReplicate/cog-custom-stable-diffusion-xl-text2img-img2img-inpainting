@@ -199,7 +199,7 @@ class Predictor(BasePredictor):
         self,
         prompt: str = Input(
             description="Input prompt",
-            default="score_9, score_8_up, score_7_up, very beautiful girl on the beach, zoom view, portrait"
+            default="score_9, score_8_up, score_7_up, score_6_up, very beautiful girl on the beach, zoom view, portrait"
         ),
         negative_prompt: str = Input(
             description="Negative Input prompt",
@@ -236,7 +236,7 @@ class Predictor(BasePredictor):
             description="Number of denoising steps", ge=1, le=500, default=40
         ),
         guidance_scale: float = Input(
-            description="Scale for classifier-free guidance", ge=1, le=50, default=7
+            description="Scale for classifier-free guidance", ge=1, le=50, default=3.5
         ),
         strength: float = Input(
             description="Prompt strength when using img2img / inpaint. 1.0 corresponds to full destruction of information in image",
